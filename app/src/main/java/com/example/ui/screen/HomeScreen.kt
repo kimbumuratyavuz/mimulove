@@ -647,7 +647,7 @@ fun HomeScreen(
                 }
             },
             text = {
-                Column(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
                     // Anniversary row
                     Text(
                         text = "Yıldönümü / Tanışma Tarihi",
