@@ -16,7 +16,8 @@ import com.example.util.HeartVibrator
 
 object CoupleNotificationHelper {
 
-    const val CHANNEL_HEARTS_ID = "mimu_heart_alerts"
+    private const val LEGACY_CHANNEL_HEARTS_ID = "mimu_heart_alerts"
+    const val CHANNEL_HEARTS_ID = "mimu_heart_alerts_app_sound_v2"
     const val CHANNEL_HEARTS_NAME = "Mimu Kalp ve Aşk Bildirimleri"
 
     const val CHANNEL_SERVICE_ID = "mimu_service_status"
@@ -39,15 +40,20 @@ object CoupleNotificationHelper {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-            // High priority channel for incoming hearts, whispers and pair requests
+            // Remove old channel that had default device notification sound attached
+            runCatching {
+                manager.deleteNotificationChannel(LEGACY_CHANNEL_HEARTS_ID)
+            }
+
+            // High priority channel with NO system sound (so ONLY the app's custom sound plays)
             val heartChannel = NotificationChannel(
                 CHANNEL_HEARTS_ID,
                 CHANNEL_HEARTS_NAME,
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "Sevdiğinizden gelen anlık kalp atışları, aşk notları ve eşleşme bildirimleri"
-                enableVibration(true)
-                vibrationPattern = longArrayOf(0, 110, 80, 160)
+                setSound(null, null)
+                enableVibration(false)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 setShowBadge(true)
             }
@@ -60,6 +66,8 @@ object CoupleNotificationHelper {
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Uygulama kapalıyken kalp bildirimlerini yakalamak için arka plan servisi"
+                setSound(null, null)
+                enableVibration(false)
                 setShowBadge(false)
             }
             manager.createNotificationChannel(serviceChannel)
@@ -85,6 +93,8 @@ object CoupleNotificationHelper {
             .setSmallIcon(R.drawable.ic_widget_heart)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .setSilent(true)
+            .setSound(null)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
@@ -129,12 +139,14 @@ object CoupleNotificationHelper {
             .setContentIntent(overlayPendingIntent)
             .setFullScreenIntent(overlayPendingIntent, true)
             .setAutoCancel(true)
-            .setVibrate(longArrayOf(0, 110, 80, 160))
+            .setSound(null)
+            .setDefaults(0)
             .build()
 
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(HEART_NOTIFICATION_ID, notification)
 
+        // Play ONLY the app's custom sound and heartbeat vibration
         HeartSoundPlayer.playLoveChime()
         HeartVibrator.vibrateHeartbeat(context)
     }
@@ -174,7 +186,8 @@ object CoupleNotificationHelper {
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
-            .setVibrate(longArrayOf(0, 110, 80, 160))
+            .setSound(null)
+            .setDefaults(0)
             .build()
 
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -211,7 +224,8 @@ object CoupleNotificationHelper {
             .setCategory(NotificationCompat.CATEGORY_SOCIAL)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
-            .setVibrate(longArrayOf(0, 110, 80, 160))
+            .setSound(null)
+            .setDefaults(0)
             .build()
 
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -248,7 +262,8 @@ object CoupleNotificationHelper {
             .setCategory(NotificationCompat.CATEGORY_SOCIAL)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
-            .setVibrate(longArrayOf(0, 110, 80, 160))
+            .setSound(null)
+            .setDefaults(0)
             .build()
 
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

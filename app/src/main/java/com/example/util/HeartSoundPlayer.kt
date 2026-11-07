@@ -12,10 +12,17 @@ object HeartSoundPlayer {
 
     private val scope = CoroutineScope(Dispatchers.Default)
 
+    @Volatile
+    private var lastChimeTimestamp: Long = 0L
+
     /**
      * Plays a harmonious romantic chime chord (528Hz + 660Hz) with smooth decay.
      */
     fun playLoveChime() {
+        val now = System.currentTimeMillis()
+        if (now - lastChimeTimestamp < 350L) return
+        lastChimeTimestamp = now
+
         scope.launch {
             try {
                 val sampleRate = 44100
@@ -97,7 +104,7 @@ object HeartSoundPlayer {
         val track = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                     .build()
             )
@@ -108,7 +115,7 @@ object HeartSoundPlayer {
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build()
             )
-            .setBufferSizeInBytes(buffer.size * 2.coerceAtLeast(minBufferSize))
+            .setBufferSizeInBytes((buffer.size * 2).coerceAtLeast(minBufferSize))
             .setTransferMode(AudioTrack.MODE_STATIC)
             .build()
 
