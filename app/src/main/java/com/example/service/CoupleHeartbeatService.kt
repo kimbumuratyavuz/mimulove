@@ -9,7 +9,8 @@ import android.os.IBinder
 import androidx.core.content.ContextCompat
 import com.example.R
 import com.example.data.model.Couple
-import com.example.data.model.User
+import com.example.data.model.toCoupleModel
+import com.example.data.model.toUserModel
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -18,12 +19,16 @@ import com.google.firebase.firestore.ListenerRegistration
 class CoupleHeartbeatService : Service() {
 
     private var userListener: ListenerRegistration? = null
-    private var coupleListener: ListenerRegistration? = null
+    private var coupleDirectListener: ListenerRegistration? = null
+    private var coupleUser1Listener: ListenerRegistration? = null
+    private var coupleUser2Listener: ListenerRegistration? = null
 
-    private var lastKnownHeartTimestamp: Long = 0L
-    private var lastKnownNoteTimestamp: Long = 0L
     private var currentCoupleId: String = ""
     private var myUserId: String = ""
+
+    private val prefs by lazy {
+        getSharedPreferences("mimu_heartbeat_service_prefs", Context.MODE_PRIVATE)
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -64,8 +69,10 @@ class CoupleHeartbeatService : Service() {
 
         val uid = intent?.getStringExtra(EXTRA_USER_ID) ?: Firebase.auth.currentUser?.uid
         if (!uid.isNullOrBlank()) {
-            myUserId = uid
-            startFirestoreListeners(uid)
+            if (myUserId != uid || coupleUser1Listener == null) {
+                myUserId = uid
+                startFirestoreListeners(uid)
+            }
         }
 
         return START_STICKY
@@ -76,76 +83,159 @@ class CoupleHeartbeatService : Service() {
         val firestore = FirebaseFirestore.getInstance(dbId)
 
         userListener?.remove()
+        coupleUser1Listener?.remove()
+        coupleUser2Listener?.remove()
+
+        // 1. Listen to user profile for direct coupleId
         userListener = firestore.collection("users").document(uid)
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
-                val user = snapshot.toObject(User::class.java) ?: return@addSnapshotListener
+                val user = snapshot.toUserModel() ?: return@addSnapshotListener
                 val newCoupleId = user.coupleId
 
                 if (newCoupleId.isBlank()) {
                     currentCoupleId = ""
-                    coupleListener?.remove()
+                    coupleDirectListener?.remove()
                 } else if (newCoupleId != currentCoupleId) {
-                    val isFirstAttachment = currentCoupleId.isEmpty()
                     currentCoupleId = newCoupleId
-                    // If service was already running and coupleId just got populated by partner
-                    if (!isFirstAttachment) {
-                        CoupleNotificationHelper.showPairRequestNotification(
-                            this@CoupleHeartbeatService,
-                            partnerName = "Sevdiğin"
-                        )
-                    }
-                    listenToCouple(firestore, newCoupleId)
+                    listenToDirectCouple(firestore, newCoupleId)
+                }
+            }
+
+        // 2. Listen directly to couples where user1Id == uid or user2Id == uid
+        coupleUser1Listener = firestore.collection("couples")
+            .whereEqualTo("user1Id", uid)
+            .addSnapshotListener { snap, error ->
+                if (error != null || snap == null) return@addSnapshotListener
+                snap.documents.mapNotNull { it.toCoupleModel() }.forEach { couple ->
+                    handleCoupleSnapshot(couple)
+                }
+            }
+
+        coupleUser2Listener = firestore.collection("couples")
+            .whereEqualTo("user2Id", uid)
+            .addSnapshotListener { snap, error ->
+                if (error != null || snap == null) return@addSnapshotListener
+                snap.documents.mapNotNull { it.toCoupleModel() }.forEach { couple ->
+                    handleCoupleSnapshot(couple)
                 }
             }
     }
 
-    private fun listenToCouple(firestore: FirebaseFirestore, coupleId: String) {
-        coupleListener?.remove()
-        coupleListener = firestore.collection("couples").document(coupleId)
+    private fun listenToDirectCouple(firestore: FirebaseFirestore, coupleId: String) {
+        coupleDirectListener?.remove()
+        coupleDirectListener = firestore.collection("couples").document(coupleId)
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
-                val couple = snapshot.toObject(Couple::class.java) ?: return@addSnapshotListener
+                val couple = snapshot.toCoupleModel() ?: return@addSnapshotListener
+                handleCoupleSnapshot(couple)
+            }
+    }
 
-                if (!couple.isMatched) {
-                    currentCoupleId = ""
-                    coupleListener?.remove()
-                    return@addSnapshotListener
-                }
+    private fun handleCoupleSnapshot(couple: Couple) {
+        if (myUserId.isBlank()) return
 
-                // Detect partner's heart
-                val heartSender = couple.lastHeartSenderId
-                val heartTime = couple.lastHeartTimestamp
-
-                if (heartSender.isNotBlank() && heartSender != myUserId && heartTime > lastKnownHeartTimestamp) {
-                    val isFirstSnapshot = (lastKnownHeartTimestamp == 0L)
-                    lastKnownHeartTimestamp = heartTime
-                    // Only alert if this is an actual event after service attached (or within the last 15 seconds)
-                    val isRecent = System.currentTimeMillis() - heartTime < 15_000
-                    if (!isFirstSnapshot || isRecent) {
-                        val senderName = if (heartSender == couple.user1Id) couple.user1Name else couple.user2Name
-                        CoupleNotificationHelper.showHeartReceivedNotification(
-                            this,
-                            senderName = senderName.ifBlank { "Aşkın" },
-                            noteText = couple.lastNoteText,
-                            timestamp = heartTime
-                        )
-                    }
-                }
-
-                // Detect partner's note if updated separately
-                val noteSender = couple.lastNoteSenderId
-                val noteTime = couple.lastNoteTimestamp
-                if (noteSender.isNotBlank() && noteSender != myUserId && noteTime > lastKnownNoteTimestamp) {
-                    lastKnownNoteTimestamp = noteTime
+        // Case 1: Incoming Pending Pair Request for this user
+        if (couple.isPending) {
+            if (couple.pendingRequesterId.isNotBlank() && couple.pendingRequesterId != myUserId) {
+                val pendingKey = "${couple.coupleId}_${couple.anniversaryDate}"
+                val lastNotifiedPending = prefs.getString("last_notified_pending", "")
+                if (lastNotifiedPending != pendingKey) {
+                    prefs.edit().putString("last_notified_pending", pendingKey).apply()
+                    val partnerName = couple.pendingRequesterName.ifBlank {
+                        if (couple.user1Id == myUserId) couple.user2Name else couple.user1Name
+                    }.ifBlank { "Sevdiğin" }
+                    CoupleNotificationHelper.showPairRequestNotification(
+                        this,
+                        partnerName = partnerName
+                    )
                 }
             }
+            return
+        }
+
+        if (!couple.isMatched) {
+            return
+        }
+
+        // Case 2: Partner just accepted our pending request
+        val matchKey = "${couple.coupleId}_${couple.anniversaryDate}_matched"
+        val lastNotifiedMatch = prefs.getString("last_notified_match", "")
+        if (lastNotifiedMatch != matchKey) {
+            val wasPendingFromMe = couple.pendingRequesterId == myUserId &&
+                (System.currentTimeMillis() - couple.lastHeartTimestamp < 30_000L)
+            prefs.edit().putString("last_notified_match", matchKey).apply()
+            if (wasPendingFromMe && couple.lastHeartSenderId != myUserId) {
+                val partnerName = (if (couple.user1Id == myUserId) couple.user2Name else couple.user1Name)
+                    .ifBlank { "Sevdiğin" }
+                CoupleNotificationHelper.showPairAcceptedNotification(
+                    this,
+                    partnerName = partnerName
+                )
+            }
+        }
+
+        // Case 3: Partner sent a Heart
+        val heartTimeKey = "last_heart_${couple.coupleId}"
+        val lastKnownHeartTimestamp = prefs.getLong(heartTimeKey, 0L)
+        val heartSender = couple.lastHeartSenderId
+        val heartTime = couple.lastHeartTimestamp
+
+        if (heartTime > 0L && heartTime > lastKnownHeartTimestamp) {
+            prefs.edit().putLong(heartTimeKey, heartTime).apply()
+            val isInitialAttachOldEvent = (lastKnownHeartTimestamp == 0L) &&
+                (System.currentTimeMillis() - heartTime > 30_000L)
+
+            if (heartSender.isNotBlank() && heartSender != myUserId && !isInitialAttachOldEvent) {
+                val senderName = couple.lastHeartSenderName.ifBlank {
+                    if (heartSender == couple.user1Id) couple.user1Name else couple.user2Name
+                }.ifBlank { "Aşkın" }
+                val attachedNote = if (couple.lastNoteTimestamp == heartTime) couple.lastNoteText else ""
+                CoupleNotificationHelper.showHeartReceivedNotification(
+                    this,
+                    senderName = senderName,
+                    noteText = attachedNote,
+                    timestamp = heartTime
+                )
+            }
+        }
+
+        // Case 4: Partner sent a standalone Love Note
+        val noteTimeKey = "last_note_${couple.coupleId}"
+        val lastKnownNoteTimestamp = prefs.getLong(noteTimeKey, 0L)
+        val noteSender = couple.lastNoteSenderId
+        val noteTime = couple.lastNoteTimestamp
+
+        if (noteTime > 0L && noteTime > lastKnownNoteTimestamp) {
+            prefs.edit().putLong(noteTimeKey, noteTime).apply()
+            val isInitialAttachOldEvent = (lastKnownNoteTimestamp == 0L) &&
+                (System.currentTimeMillis() - noteTime > 30_000L)
+
+            if (noteSender.isNotBlank() &&
+                noteSender != myUserId &&
+                !isInitialAttachOldEvent &&
+                noteTime != heartTime &&
+                couple.lastNoteText.isNotBlank()
+            ) {
+                val senderName = couple.lastNoteSenderName.ifBlank {
+                    if (noteSender == couple.user1Id) couple.user1Name else couple.user2Name
+                }.ifBlank { "Aşkın" }
+                CoupleNotificationHelper.showLoveNoteReceivedNotification(
+                    this,
+                    senderName = senderName,
+                    noteText = couple.lastNoteText,
+                    timestamp = noteTime
+                )
+            }
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         userListener?.remove()
-        coupleListener?.remove()
+        coupleDirectListener?.remove()
+        coupleUser1Listener?.remove()
+        coupleUser2Listener?.remove()
     }
 
     companion object {

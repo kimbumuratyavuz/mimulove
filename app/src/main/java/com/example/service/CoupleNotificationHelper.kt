@@ -32,18 +32,19 @@ object CoupleNotificationHelper {
     const val SERVICE_NOTIFICATION_ID = 1001
     const val HEART_NOTIFICATION_ID = 2002
     const val PAIR_NOTIFICATION_ID = 3003
+    const val NOTE_NOTIFICATION_ID = 4004
 
     fun createNotificationChannels(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-            // High priority channel for incoming hearts and whispers
+            // High priority channel for incoming hearts, whispers and pair requests
             val heartChannel = NotificationChannel(
                 CHANNEL_HEARTS_ID,
                 CHANNEL_HEARTS_NAME,
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Sevdiğinizden gelen anlık kalp atışları ve aşk notları"
+                description = "Sevdiğinizden gelen anlık kalp atışları, aşk notları ve eşleşme bildirimleri"
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 110, 80, 160)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
@@ -105,7 +106,7 @@ object CoupleNotificationHelper {
 
         val pendingIntent = PendingIntent.getActivity(
             context,
-            timestamp.toInt(),
+            (timestamp and 0x7FFFFFFF).toInt(),
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -128,7 +129,51 @@ object CoupleNotificationHelper {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(HEART_NOTIFICATION_ID, notification)
 
-        // Also trigger sound and vibration
+        HeartSoundPlayer.playLoveChime()
+        HeartVibrator.vibrateHeartbeat(context)
+    }
+
+    fun showLoveNoteReceivedNotification(
+        context: Context,
+        senderName: String,
+        noteText: String,
+        timestamp: Long
+    ) {
+        createNotificationChannels(context)
+
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = ACTION_OPEN_HEART
+            putExtra(EXTRA_SENDER_NAME, senderName)
+            putExtra(EXTRA_NOTE_TEXT, noteText)
+            putExtra(EXTRA_TIMESTAMP, timestamp)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            ((timestamp + 1) and 0x7FFFFFFF).toInt(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val title = "💌 $senderName sana aşk notu gönderdi!"
+        val message = noteText.ifBlank { "Seni çok seviyorum ❤️" }
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_HEARTS_ID)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setSmallIcon(R.drawable.ic_widget_heart)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setVibrate(longArrayOf(0, 110, 80, 160))
+            .build()
+
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NOTE_NOTIFICATION_ID, notification)
+
         HeartSoundPlayer.playLoveChime()
         HeartVibrator.vibrateHeartbeat(context)
     }
@@ -148,16 +193,56 @@ object CoupleNotificationHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val title = "💞 Eşleşme Bildirimi!"
-        val message = "$partnerName seninle Mimu LoveApp üzerinden eşleşti!"
+        val title = "💞 Eşleşme İsteği Geldi!"
+        val message = "$partnerName seninle Mimu LoveApp üzerinden eşleşmek istiyor! Onaylamak için dokun ❤️"
 
         val notification = NotificationCompat.Builder(context, CHANNEL_HEARTS_ID)
             .setContentTitle(title)
             .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
             .setSmallIcon(R.drawable.ic_widget_heart)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_SOCIAL)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
+            .setVibrate(longArrayOf(0, 110, 80, 160))
+            .build()
+
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(PAIR_NOTIFICATION_ID, notification)
+
+        HeartSoundPlayer.playLoveChime()
+        HeartVibrator.vibrateHeartbeat(context)
+    }
+
+    fun showPairAcceptedNotification(context: Context, partnerName: String) {
+        createNotificationChannels(context)
+
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = ACTION_OPEN_PAIR
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            998,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val title = "💞 Eşleşme Onaylandı!"
+        val message = "$partnerName eşleşme isteğini kabul etti! Artık kalpleriniz bağlı ❤️"
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_HEARTS_ID)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setSmallIcon(R.drawable.ic_widget_heart)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setVibrate(longArrayOf(0, 110, 80, 160))
             .build()
 
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

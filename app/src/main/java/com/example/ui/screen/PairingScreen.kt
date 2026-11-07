@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -27,15 +28,19 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.BrightnessAuto
 import androidx.compose.material.icons.outlined.FavoriteBorder
-import androidx.compose.material.icons.outlined.PersonAdd
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -46,6 +51,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -55,6 +61,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -66,7 +73,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -76,6 +82,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.Couple
 import com.example.data.model.User
 import com.example.ui.component.PairingStatusBadge
 import com.example.ui.theme.AppThemeMode
@@ -87,12 +94,15 @@ import kotlinx.coroutines.launch
 @Composable
 fun PairingScreen(
     currentUser: User,
+    pendingCouple: Couple? = null,
     isPairing: Boolean,
     errorMessage: String?,
     successMessage: String?,
     currentThemeMode: AppThemeMode,
     onThemeChange: (AppThemeMode) -> Unit,
     onPairRequested: (partnerCode: String) -> Unit,
+    onAcceptPairRequest: () -> Unit = {},
+    onRejectPairRequest: () -> Unit = {},
     onClearMessages: () -> Unit
 ) {
     val context = LocalContext.current
@@ -101,8 +111,98 @@ fun PairingScreen(
     var inputCode by remember { mutableStateOf("") }
     val scrollState = rememberScrollState()
 
+    val isIncomingRequest = pendingCouple != null &&
+        pendingCouple.isPending &&
+        pendingCouple.pendingRequesterId != currentUser.userId
+
+    val isOutgoingRequest = pendingCouple != null &&
+        pendingCouple.isPending &&
+        pendingCouple.pendingRequesterId == currentUser.userId
+
+    val partnerDisplayName = remember(pendingCouple, currentUser.userId) {
+        if (pendingCouple == null) ""
+        else if (pendingCouple.pendingRequesterId != currentUser.userId) {
+            pendingCouple.pendingRequesterName.ifBlank {
+                if (pendingCouple.user1Id == currentUser.userId) pendingCouple.user2Name else pendingCouple.user1Name
+            }.ifBlank { "Sevdiğin" }
+        } else {
+            (if (pendingCouple.user1Id == currentUser.userId) pendingCouple.user2Name else pendingCouple.user1Name)
+                .ifBlank { "Sevdiğin" }
+        }
+    }
+
     // 2-page horizontal pager for tabs
     val pagerState = rememberPagerState(pageCount = { 2 })
+
+    // Modal dialog when an incoming pair request arrives
+    if (isIncomingRequest) {
+        AlertDialog(
+            onDismissRequest = { /* Keep visible so user can approve or reject */ },
+            icon = {
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Favorite,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(30.dp)
+                    )
+                }
+            },
+            title = {
+                Text(
+                    text = "💞 Eşleşme İsteği Geldi!",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    textAlign = TextAlign.Center
+                )
+            },
+            text = {
+                Text(
+                    text = "$partnerDisplayName seninle Mimu LoveApp üzerinden eşleşmek istiyor!\n\nOnayladığında kalpleriniz bağlanacak ve birbirinize anlık kalp ve aşk notu gönderebileceksiniz ❤️",
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        HeartSoundPlayer.playLoveChime()
+                        HeartVibrator.vibrateHeartbeat(context)
+                        onAcceptPairRequest()
+                    },
+                    enabled = !isPairing,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.testTag("dialog_accept_pair_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Onayla ve Eşleş ❤️")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        HeartVibrator.vibrateTouch(context)
+                        onRejectPairRequest()
+                    },
+                    enabled = !isPairing,
+                    modifier = Modifier.testTag("dialog_reject_pair_button")
+                ) {
+                    Text("Reddet", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -173,7 +273,6 @@ fun PairingScreen(
             )
             Spacer(modifier = Modifier.height(6.dp))
 
-            // 2-line description sentence requested by user
             Text(
                 text = "Sevdiğinle eşleşmek için kodunu paylaş\nveya onun kodunu gir.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -186,8 +285,145 @@ fun PairingScreen(
             // Real-time Pairing Status Badge (Beklemede)
             PairingStatusBadge(
                 isMatched = false,
-                partnerName = ""
+                partnerName = partnerDisplayName
             )
+
+            // Incoming Request Card on screen as well
+            if (isIncomingRequest) {
+                Spacer(modifier = Modifier.height(14.dp))
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("incoming_pair_request_card"),
+                    shape = RoundedCornerShape(22.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                    ),
+                    border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.NotificationsActive,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "$partnerDisplayName Eşleşmek İstiyor!",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Eşleşme isteğini onayladığında her iki cihazda da kalp ve not ekranı açılacak.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    HeartVibrator.vibrateTouch(context)
+                                    onRejectPairRequest()
+                                },
+                                enabled = !isPairing,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Reddet")
+                            }
+                            Button(
+                                onClick = {
+                                    HeartSoundPlayer.playLoveChime()
+                                    HeartVibrator.vibrateHeartbeat(context)
+                                    onAcceptPairRequest()
+                                },
+                                enabled = !isPairing,
+                                modifier = Modifier
+                                    .weight(1.4f)
+                                    .testTag("accept_pair_request_button"),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Icon(imageVector = Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Onayla ❤️")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Outgoing Request Waiting Card
+            if (isOutgoingRequest) {
+                Spacer(modifier = Modifier.height(14.dp))
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("outgoing_pair_request_card"),
+                    shape = RoundedCornerShape(22.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
+                    ),
+                    border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.HourglassTop,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "$partnerDisplayName Onayı Bekleniyor...",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Eşine bildirim gönderildi. Eşin onayladığı anda eşleşme gerçekleşecek ve kalp ekranı otomatik olarak açılacak 💞",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = {
+                                HeartVibrator.vibrateTouch(context)
+                                onRejectPairRequest()
+                            },
+                            enabled = !isPairing,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("İsteği İptal Et")
+                        }
+                    }
+                }
+            }
 
             if (errorMessage != null) {
                 Spacer(modifier = Modifier.height(10.dp))
@@ -552,7 +788,7 @@ fun PairingScreen(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        "Eşleş ve Kalpleri Bağla",
+                                        "Eşleşme İsteği Gönder",
                                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
                                     )
                                 }

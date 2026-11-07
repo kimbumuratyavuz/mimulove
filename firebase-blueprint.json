@@ -29,7 +29,7 @@
     },
     "Couple": {
       "title": "Couple",
-      "description": "Shared couple state including heartbeat, love notes, and anniversary",
+      "description": "Shared couple state including pairing approval status, heartbeat, love notes, and anniversary",
       "type": "object",
       "properties": {
         "coupleId": { "type": "string" },
@@ -39,6 +39,10 @@
         "user2Name": { "type": "string" },
         "anniversaryDate": { "type": "number" },
         "isMatched": { "type": "boolean" },
+        "matched": { "type": "boolean" },
+        "status": { "type": "string" },
+        "pendingRequesterId": { "type": "string" },
+        "pendingRequesterName": { "type": "string" },
         "lastHeartSenderId": { "type": "string" },
         "lastHeartSenderName": { "type": "string" },
         "lastHeartTimestamp": { "type": "number" },

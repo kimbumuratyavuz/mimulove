@@ -1,19 +1,18 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.Couple
 import com.example.data.model.User
 import com.example.data.repository.CoupleRepository
 import com.example.service.CoupleHeartbeatService
+import com.example.service.CoupleNotificationHelper
 import com.example.ui.theme.AppThemeMode
+import com.example.ui.theme.HeartColor
 import com.example.util.HeartSoundPlayer
 import com.example.util.HeartVibrator
-import com.google.firebase.Firebase
-import com.google.firebase.auth.auth
-import android.content.Context
-import com.example.ui.theme.HeartColor
 import com.example.widget.MimuLoveAppWidgetProvider
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,38 +56,36 @@ class CoupleViewModel(application: Application) : AndroidViewModel(application) 
     private val _successMessage = MutableStateFlow<String?>(null)
     val successMessage: StateFlow<String?> = _successMessage.asStateFlow()
 
+    private var userObservationJob: Job? = null
     private var coupleObservationJob: Job? = null
+    private var lastObservedCoupleId: String = ""
     private var lastObservedHeartTime: Long = 0L
+    private var lastObservedNoteTime: Long = 0L
+    private var lastNotifiedPendingKey: String = ""
+    private var wasPendingBefore: Boolean = false
 
     fun initUser(uid: String, displayName: String, email: String) {
         viewModelScope.launch {
             try {
-                // Immediately start service to listen for pairing even before couple is matched
+                // Start foreground service so background notifications work immediately
                 CoupleHeartbeatService.start(getApplication(), uid)
 
                 val user = repository.getOrCreateUser(uid, displayName, email)
                 _currentUser.value = user
 
-                // Start observing user profile
-                var previousCoupleId = user.coupleId
-                repository.observeUser(uid).collectLatest { updatedUser ->
-                    _currentUser.value = updatedUser
-                    val coupleId = updatedUser?.coupleId
-                    if (!coupleId.isNullOrBlank()) {
-                        // If transitioned from uncoupled to coupled, trigger pair notification
-                        if (previousCoupleId.isBlank()) {
-                            previousCoupleId = coupleId
-                            com.example.service.CoupleNotificationHelper.showPairRequestNotification(
-                                getApplication(),
-                                partnerName = "Sevdiğin"
-                            )
+                // Start observing couple documents where user is user1Id or user2Id
+                startCoupleObservation(uid, user.coupleId)
+
+                // Observe user document updates
+                userObservationJob?.cancel()
+                userObservationJob = viewModelScope.launch {
+                    repository.observeUser(uid).collectLatest { updatedUser ->
+                        if (updatedUser != null) {
+                            _currentUser.value = updatedUser
+                            if (updatedUser.coupleId.isNotBlank() && updatedUser.coupleId != lastObservedCoupleId) {
+                                startCoupleObservation(uid, updatedUser.coupleId)
+                            }
                         }
-                        observeCouple(coupleId)
-                        CoupleHeartbeatService.start(getApplication(), uid)
-                    } else {
-                        previousCoupleId = ""
-                        coupleObservationJob?.cancel()
-                        _currentCouple.value = null
                     }
                 }
             } catch (e: Exception) {
@@ -97,13 +94,14 @@ class CoupleViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun observeCouple(coupleId: String) {
+    private fun startCoupleObservation(uid: String, coupleIdHint: String) {
+        lastObservedCoupleId = coupleIdHint
         coupleObservationJob?.cancel()
         coupleObservationJob = viewModelScope.launch {
-            repository.observeCouple(coupleId).collectLatest { couple ->
-                if (couple == null || !couple.isMatched) {
+            repository.observeCoupleForUser(uid, coupleIdHint).collectLatest { couple ->
+                if (couple == null || (!couple.isMatched && !couple.isPending)) {
+                    wasPendingBefore = false
                     _currentCouple.value = null
-                    CoupleHeartbeatService.stop(getApplication())
                     MimuLoveAppWidgetProvider.saveAndRefreshWidget(
                         context = getApplication(),
                         coupleNames = "Mimu LoveApp ❤️",
@@ -113,8 +111,37 @@ class CoupleViewModel(application: Application) : AndroidViewModel(application) 
                     )
                     return@collectLatest
                 }
+
                 _currentCouple.value = couple
-                val myUid = _currentUser.value?.userId ?: ""
+
+                // Handle Pending Pair Request state
+                if (couple.isPending) {
+                    wasPendingBefore = true
+                    if (couple.pendingRequesterId.isNotBlank() && couple.pendingRequesterId != uid) {
+                        val pendingKey = "${couple.coupleId}_${couple.anniversaryDate}"
+                        if (lastNotifiedPendingKey != pendingKey) {
+                            lastNotifiedPendingKey = pendingKey
+                            val partnerName = couple.pendingRequesterName.ifBlank {
+                                if (couple.user1Id == uid) couple.user2Name else couple.user1Name
+                            }.ifBlank { "Sevdiğin" }
+                            CoupleNotificationHelper.showPairRequestNotification(
+                                getApplication(),
+                                partnerName = partnerName
+                            )
+                        }
+                    }
+                    return@collectLatest
+                }
+
+                // Couple is Matched!
+                if (wasPendingBefore) {
+                    wasPendingBefore = false
+                    _successMessage.value = "Tebrikler! Eşleşme onaylandı, kalpleriniz bağlandı ❤️"
+                    try {
+                        HeartSoundPlayer.playLoveChime()
+                        HeartVibrator.vibrateHeartbeat(getApplication())
+                    } catch (_: Exception) {}
+                }
 
                 // Update Home Screen Widget
                 val coupleTitle = "${couple.user1Name} & ${couple.user2Name}"
@@ -126,13 +153,34 @@ class CoupleViewModel(application: Application) : AndroidViewModel(application) 
                     isMatched = true
                 )
 
+                // Initialize baseline timestamps on first load so old hearts/notes don't re-alert on startup
+                if (lastObservedHeartTime == 0L) {
+                    lastObservedHeartTime = couple.lastHeartTimestamp
+                }
+                if (lastObservedNoteTime == 0L) {
+                    lastObservedNoteTime = couple.lastNoteTimestamp
+                }
+
+                // Detect live incoming heart from partner
                 if (couple.lastHeartSenderId.isNotBlank() &&
-                    couple.lastHeartSenderId != myUid &&
+                    couple.lastHeartSenderId != uid &&
                     couple.lastHeartTimestamp > lastObservedHeartTime
                 ) {
                     lastObservedHeartTime = couple.lastHeartTimestamp
-                    // Trigger on-screen burst, audio and haptics
-                    triggerHeartBurst(couple.lastHeartSenderName, couple.lastNoteText)
+                    val hasNewNoteWithHeart = couple.lastNoteTimestamp > lastObservedNoteTime ||
+                        couple.lastNoteTimestamp == couple.lastHeartTimestamp
+                    if (couple.lastNoteTimestamp > lastObservedNoteTime) {
+                        lastObservedNoteTime = couple.lastNoteTimestamp
+                    }
+                    val noteToDisplay = if (hasNewNoteWithHeart) couple.lastNoteText else ""
+                    triggerHeartBurst(couple.lastHeartSenderName, noteToDisplay)
+                } else if (couple.lastNoteSenderId.isNotBlank() &&
+                    couple.lastNoteSenderId != uid &&
+                    couple.lastNoteTimestamp > lastObservedNoteTime
+                ) {
+                    // Detect live incoming standalone love note from partner
+                    lastObservedNoteTime = couple.lastNoteTimestamp
+                    triggerHeartBurst(couple.lastNoteSenderName, couple.lastNoteText)
                 }
             }
         }
@@ -143,21 +191,63 @@ class CoupleViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             _isPairing.value = true
             _errorMessage.value = null
+            _successMessage.value = null
             val result = repository.pairWithCode(user, partnerCode)
             _isPairing.value = false
             result.onSuccess { couple ->
                 _currentCouple.value = couple
                 _currentUser.value = user.copy(coupleId = couple.coupleId)
-                observeCouple(couple.coupleId)
+                startCoupleObservation(user.userId, couple.coupleId)
                 CoupleHeartbeatService.start(getApplication(), user.userId)
-                _successMessage.value = "Tebrikler! Sevdiğinle başarıyla eşleştiniz ❤️"
+                if (couple.isMatched) {
+                    _successMessage.value = "Tebrikler! Sevdiğinle başarıyla eşleştiniz ❤️"
+                } else {
+                    val partnerName = couple.user2Name.ifBlank { "Eşin" }
+                    _successMessage.value = "$partnerName adlı eşine eşleşme bildirimi gönderildi! Onayladığında ekran açılacak 💞"
+                }
                 try {
                     HeartSoundPlayer.playLoveChime()
                     HeartVibrator.vibrateHeartbeat(getApplication())
                 } catch (_: Exception) {}
             }.onFailure { error ->
-                _errorMessage.value = error.localizedMessage ?: "Eşleşme başarısız oldu."
+                _errorMessage.value = error.localizedMessage ?: "Eşleşme isteği gönderilemedi."
             }
+        }
+    }
+
+    fun acceptPairRequest() {
+        val user = _currentUser.value ?: return
+        val couple = _currentCouple.value ?: return
+        viewModelScope.launch {
+            _isPairing.value = true
+            _errorMessage.value = null
+            val result = repository.acceptPairRequest(couple, user)
+            _isPairing.value = false
+            result.onSuccess { matchedCouple ->
+                lastObservedHeartTime = matchedCouple.lastHeartTimestamp
+                lastObservedNoteTime = matchedCouple.lastNoteTimestamp
+                _currentCouple.value = matchedCouple
+                _currentUser.value = user.copy(coupleId = matchedCouple.coupleId)
+                _successMessage.value = "Eşleşme onaylandı! Kalpleriniz artık bir ❤️"
+                try {
+                    HeartSoundPlayer.playLoveChime()
+                    HeartVibrator.vibrateHeartbeat(getApplication())
+                } catch (_: Exception) {}
+            }.onFailure { error ->
+                _errorMessage.value = "Onaylama hatası: ${error.localizedMessage}"
+            }
+        }
+    }
+
+    fun rejectOrCancelPairRequest() {
+        val user = _currentUser.value ?: return
+        val couple = _currentCouple.value ?: return
+        viewModelScope.launch {
+            _isPairing.value = true
+            repository.rejectOrCancelPairRequest(couple, user.userId)
+            _isPairing.value = false
+            _currentCouple.value = null
+            _successMessage.value = "Eşleşme isteği iptal edildi."
         }
     }
 
@@ -217,12 +307,10 @@ class CoupleViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun unlinkCouple() {
-        val user = _currentUser.value ?: return
         val couple = _currentCouple.value ?: return
         viewModelScope.launch {
             try {
                 repository.unlinkCouple(couple.coupleId, couple.user1Id, couple.user2Id)
-                CoupleHeartbeatService.stop(getApplication())
                 _currentCouple.value = null
                 _successMessage.value = "Eşleşme her iki cihaz için de sonlandırıldı."
             } catch (e: Exception) {
@@ -244,13 +332,12 @@ class CoupleViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun triggerSendHeartWhenReady() {
         viewModelScope.launch {
-            // Wait up to 3 seconds for active user and couple if app was cold-started
             var attempts = 0
             while ((_currentUser.value == null || _currentCouple.value == null) && attempts < 15) {
                 kotlinx.coroutines.delay(200)
                 attempts++
             }
-            if (_currentCouple.value != null && _currentUser.value != null) {
+            if (_currentCouple.value?.isMatched == true && _currentUser.value != null) {
                 sendHeart(optionalNote = "")
                 _successMessage.value = "Kalbin sevgiline anında iletildi! ❤️"
             }

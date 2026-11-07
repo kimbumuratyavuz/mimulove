@@ -203,12 +203,15 @@ fun AppRootContent(viewModel: CoupleViewModel) {
             } else {
                 PairingScreen(
                     currentUser = activeUser,
+                    pendingCouple = coupleModel?.takeIf { it.isPending },
                     isPairing = isPairing,
                     errorMessage = errorMessage,
                     successMessage = successMessage,
                     currentThemeMode = themeMode,
                     onThemeChange = viewModel::setThemeMode,
                     onPairRequested = viewModel::pairWithCode,
+                    onAcceptPairRequest = viewModel::acceptPairRequest,
+                    onRejectPairRequest = viewModel::rejectOrCancelPairRequest,
                     onClearMessages = viewModel::clearMessages
                 )
             }
