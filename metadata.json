@@ -1,0 +1,6 @@
+{
+  "name": "Mimu LoveApp",
+  "description": "Çiftler için anlık titreşimli kalp atışı, aşk notları ve birliktelik sayacı uygulaması",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

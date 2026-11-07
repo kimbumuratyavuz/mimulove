@@ -1,0 +1,70 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with pair code and couple reference",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "pairCode": { "type": "string" },
+        "coupleId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "displayName", "pairCode"]
+    },
+    "PairCode": {
+      "title": "PairCode",
+      "description": "Six-character lookup code pointing to a user",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "userId", "userName"]
+    },
+    "Couple": {
+      "title": "Couple",
+      "description": "Shared couple state including heartbeat, love notes, and anniversary",
+      "type": "object",
+      "properties": {
+        "coupleId": { "type": "string" },
+        "user1Id": { "type": "string" },
+        "user2Id": { "type": "string" },
+        "user1Name": { "type": "string" },
+        "user2Name": { "type": "string" },
+        "anniversaryDate": { "type": "number" },
+        "isMatched": { "type": "boolean" },
+        "lastHeartSenderId": { "type": "string" },
+        "lastHeartSenderName": { "type": "string" },
+        "lastHeartTimestamp": { "type": "number" },
+        "lastHeartCount": { "type": "number" },
+        "lastNoteText": { "type": "string" },
+        "lastNoteSenderId": { "type": "string" },
+        "lastNoteSenderName": { "type": "string" },
+        "lastNoteTimestamp": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["coupleId", "user1Id", "user2Id", "isMatched"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profile with their assigned 6-char pair code"
+    },
+    "/pair_codes/{code}": {
+      "schema": { "$ref": "#/entities/PairCode" },
+      "description": "Global pair codes index for fast lookup"
+    },
+    "/couples/{coupleId}": {
+      "schema": { "$ref": "#/entities/Couple" },
+      "description": "Real-time couple document shared between two users"
+    }
+  }
+}
