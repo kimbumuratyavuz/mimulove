@@ -76,6 +76,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.repository.CoupleRepository
+import com.example.service.CoupleNotificationHelper
 import com.example.ui.theme.HeartColor
 import com.example.ui.theme.MimuLoveAppTheme
 import com.example.util.HeartSoundPlayer
@@ -125,6 +126,7 @@ class HeartBurstOverlayActivity : ComponentActivity() {
                     noteText = noteText,
                     heartColor = heartColor,
                     onDismiss = {
+                        CoupleNotificationHelper.dismissHeartAndNoteNotifications(this)
                         finish()
                         @Suppress("DEPRECATION")
                         overridePendingTransition(0, 0)
@@ -476,6 +478,7 @@ private fun HeartBurstOverlayScreen(
                     OutlinedButton(
                         onClick = {
                             HeartVibrator.vibrateTouch(context)
+                            CoupleNotificationHelper.dismissHeartAndNoteNotifications(context)
                             onDismiss()
                         },
                         enabled = !isSendingReply,
@@ -500,6 +503,7 @@ private fun HeartBurstOverlayScreen(
                     Button(
                         onClick = {
                             if (isSendingReply || replySent) return@Button
+                            CoupleNotificationHelper.dismissHeartAndNoteNotifications(context)
                             isSendingReply = true
                             scope.launch {
                                 try {

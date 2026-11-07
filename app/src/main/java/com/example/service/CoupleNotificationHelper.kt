@@ -36,6 +36,12 @@ object CoupleNotificationHelper {
     const val PAIR_NOTIFICATION_ID = 3003
     const val NOTE_NOTIFICATION_ID = 4004
 
+    fun dismissHeartAndNoteNotifications(context: Context) {
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.cancel(HEART_NOTIFICATION_ID)
+        manager.cancel(NOTE_NOTIFICATION_ID)
+    }
+
     fun createNotificationChannels(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
