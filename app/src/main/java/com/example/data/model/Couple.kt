@@ -20,6 +20,7 @@ data class Couple(
     val status: String = "",
     val pendingRequesterId: String = "",
     val pendingRequesterName: String = "",
+    val schemaVersion: Long = CURRENT_SCHEMA_VERSION,
     val lastHeartSenderId: String = "",
     val lastHeartSenderName: String = "",
     val lastHeartTimestamp: Long = 0L,
@@ -39,13 +40,20 @@ data class Couple(
         const val STATUS_MATCHED = "MATCHED"
         const val STATUS_REJECTED = "REJECTED"
         const val STATUS_UNLINKED = "UNLINKED"
+        const val CURRENT_SCHEMA_VERSION = 2L
     }
 }
 
 fun DocumentSnapshot.toCoupleModel(): Couple? {
     if (!exists()) return null
+    val docVersion = getLong("schemaVersion") ?: 0L
+    // Legacy documents (created before schemaVersion 2) are ignored and purged automatically
+    if (docVersion < Couple.CURRENT_SCHEMA_VERSION) {
+        runCatching { reference.delete() }
+        return null
+    }
+
     val statusStr = getString("status") ?: ""
-    // Support both "isMatched" and "matched" (written by Kotlin's default boolean getter serialization)
     val rawIsMatched = getBoolean("isMatched") ?: getBoolean("matched") ?: false
     val effectiveMatched = when (statusStr) {
         Couple.STATUS_PENDING, Couple.STATUS_REJECTED, Couple.STATUS_UNLINKED -> false
@@ -71,6 +79,7 @@ fun DocumentSnapshot.toCoupleModel(): Couple? {
         status = resolvedStatus,
         pendingRequesterId = getString("pendingRequesterId")?.takeIf { it.isNotBlank() } ?: u1Id,
         pendingRequesterName = getString("pendingRequesterName")?.takeIf { it.isNotBlank() } ?: u1Name,
+        schemaVersion = docVersion,
         lastHeartSenderId = getString("lastHeartSenderId") ?: "",
         lastHeartSenderName = getString("lastHeartSenderName") ?: "",
         lastHeartTimestamp = getLong("lastHeartTimestamp") ?: 0L,

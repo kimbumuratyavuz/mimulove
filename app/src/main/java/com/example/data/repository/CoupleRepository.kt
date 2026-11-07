@@ -3,7 +3,6 @@ package com.example.data.repository
 import android.content.Context
 import com.example.R
 import com.example.data.model.Couple
-import com.example.data.model.PairCode
 import com.example.data.model.User
 import com.example.data.model.toCoupleModel
 import com.example.data.model.toPairCodeModel
@@ -32,6 +31,86 @@ class CoupleRepository(private val db: FirebaseFirestore) {
 
     private val auth = Firebase.auth
 
+    /**
+     * Purges any legacy/old couple documents from Firebase so users start clean
+     * and never have leftover duplicate pairings.
+     */
+    private suspend fun purgeLegacyCouplesForUser(uid: String, existingCoupleId: String) {
+        // Explicitly delete known old couple document if accessible
+        runCatching {
+            val legacyRef = db.collection("couples")
+                .document("HGIJb0QBltR7ZnIavXGzU5UfJDH2_YpkkCvLFr4VbsGvcMj6KcgaewqA3")
+            val snap = legacyRef.get().await()
+            if (snap.exists() && (snap.getLong("schemaVersion") ?: 0L) < Couple.CURRENT_SCHEMA_VERSION) {
+                legacyRef.delete().await()
+            }
+        }
+
+        // Delete any legacy couples where user is user1Id or user2Id
+        val asUser1 = runCatching {
+            db.collection("couples").whereEqualTo("user1Id", uid).get().await()
+        }.getOrNull()
+        asUser1?.documents?.forEach { doc ->
+            if ((doc.getLong("schemaVersion") ?: 0L) < Couple.CURRENT_SCHEMA_VERSION) {
+                runCatching { doc.reference.delete().await() }
+            }
+        }
+
+        val asUser2 = runCatching {
+            db.collection("couples").whereEqualTo("user2Id", uid).get().await()
+        }.getOrNull()
+        asUser2?.documents?.forEach { doc ->
+            if ((doc.getLong("schemaVersion") ?: 0L) < Couple.CURRENT_SCHEMA_VERSION) {
+                runCatching { doc.reference.delete().await() }
+            }
+        }
+
+        // Validate user's current coupleId; if it points to a deleted or legacy doc, clear it
+        if (existingCoupleId.isNotBlank()) {
+            val cDoc = runCatching {
+                db.collection("couples").document(existingCoupleId).get().await()
+            }.getOrNull()
+            val validCouple = cDoc?.toCoupleModel()
+            if (validCouple == null || (!validCouple.isMatched && !validCouple.isPending)) {
+                runCatching {
+                    db.collection("users").document(uid)
+                        .update("coupleId", "", "updatedAt", FieldValue.serverTimestamp())
+                        .await()
+                }
+            }
+        }
+    }
+
+    /**
+     * Returns the user's current active (matched or pending) couple, if any.
+     */
+    private suspend fun findActiveCoupleForUser(uid: String, coupleIdHint: String = ""): Couple? {
+        if (coupleIdHint.isNotBlank()) {
+            val direct = runCatching {
+                db.collection("couples").document(coupleIdHint).get().await()
+            }.getOrNull()?.toCoupleModel()
+            if (direct != null && (direct.isMatched || direct.isPending)) {
+                return direct
+            }
+        }
+
+        val list1 = runCatching {
+            db.collection("couples").whereEqualTo("user1Id", uid).get().await()
+        }.getOrNull()?.documents?.mapNotNull { it.toCoupleModel() } ?: emptyList()
+
+        val list2 = runCatching {
+            db.collection("couples").whereEqualTo("user2Id", uid).get().await()
+        }.getOrNull()?.documents?.mapNotNull { it.toCoupleModel() } ?: emptyList()
+
+        return (list1 + list2)
+            .filter { it.isMatched || it.isPending }
+            .sortedWith(
+                compareByDescending<Couple> { it.isMatched }
+                    .thenByDescending { it.updatedAt?.time ?: it.anniversaryDate }
+            )
+            .firstOrNull()
+    }
+
     suspend fun getOrCreateUser(uid: String, displayName: String, email: String): User {
         val docRef = db.collection("users").document(uid)
         val snapshot = docRef.get().await()
@@ -40,10 +119,20 @@ class CoupleRepository(private val db: FirebaseFirestore) {
         if (snapshot.exists()) {
             val existing = snapshot.toUserModel()
             if (existing != null) {
+                // Clean up any pre-v2 legacy couple matches from Firebase
+                purgeLegacyCouplesForUser(uid, existing.coupleId)
+
                 val finalCode = existing.pairCode.ifBlank { generateUniqueCode() }
                 val finalName = existing.displayName.ifBlank { safeName }
 
-                if (existing.pairCode.isBlank() || existing.displayName.isBlank()) {
+                // Re-read active couple after purge
+                val activeCouple = findActiveCoupleForUser(uid)
+                val resolvedCoupleId = activeCouple?.coupleId ?: ""
+
+                if (existing.pairCode.isBlank() ||
+                    existing.displayName.isBlank() ||
+                    existing.coupleId != resolvedCoupleId
+                ) {
                     runCatching {
                         docRef.set(
                             mapOf(
@@ -51,6 +140,7 @@ class CoupleRepository(private val db: FirebaseFirestore) {
                                 "displayName" to finalName,
                                 "email" to existing.email.ifBlank { email },
                                 "pairCode" to finalCode,
+                                "coupleId" to resolvedCoupleId,
                                 "updatedAt" to FieldValue.serverTimestamp()
                             ),
                             SetOptions.merge()
@@ -81,12 +171,15 @@ class CoupleRepository(private val db: FirebaseFirestore) {
                 return existing.copy(
                     userId = uid,
                     displayName = finalName,
-                    pairCode = finalCode
+                    pairCode = finalCode,
+                    coupleId = resolvedCoupleId
                 )
             }
         }
 
-        // Generate 6-character random alphanumeric code
+        // Purge any legacy couples even for a recreated user doc
+        purgeLegacyCouplesForUser(uid, "")
+
         val generatedCode = generateUniqueCode()
         val now = Date()
         val newUser = User(
@@ -111,7 +204,6 @@ class CoupleRepository(private val db: FirebaseFirestore) {
             )
         ).await()
 
-        // Also register in pair_codes for partner lookup
         runCatching {
             val pairCodeRef = db.collection("pair_codes").document(generatedCode)
             pairCodeRef.set(
@@ -122,8 +214,6 @@ class CoupleRepository(private val db: FirebaseFirestore) {
                     "createdAt" to FieldValue.serverTimestamp()
                 )
             ).await()
-        }.onFailure { e ->
-            android.util.Log.w("CoupleRepository", "pair_codes create warning: ${e.message}")
         }
 
         return newUser
@@ -142,9 +232,7 @@ class CoupleRepository(private val db: FirebaseFirestore) {
     }
 
     /**
-     * Observes any active or pending Couple document where this user is user1Id or user2Id
-     * (plus optional direct coupleId document), so pairing works even if cross-user profile
-     * updates are delayed or blocked by Firestore security rules.
+     * Observes the single active or pending Couple document where this user is user1Id or user2Id.
      */
     fun observeCoupleForUser(uid: String, coupleIdHint: String = ""): Flow<Couple?> = callbackFlow {
         var user1Couples: Map<String, Couple> = emptyMap()
@@ -213,7 +301,8 @@ class CoupleRepository(private val db: FirebaseFirestore) {
 
     /**
      * Sends a pairing request to the partner with the given 6-character code.
-     * If the partner has ALREADY sent a pending request to currentUser, this immediately approves it!
+     * Blocks pairing if EITHER the current user OR the partner is already matched with someone else
+     * and hasn't ended their existing pairing.
      */
     suspend fun pairWithCode(currentUser: User, partnerCode: String): Result<Couple> {
         return try {
@@ -226,7 +315,17 @@ class CoupleRepository(private val db: FirebaseFirestore) {
                 return Result.failure(IllegalArgumentException("Kendi eşleşme kodunuzla eşleşemezsiniz."))
             }
 
-            // 1. Look up partner code in pair_codes, with fallback to users collection
+            // 1. Ensure currentUser does NOT already have an active match
+            val myActiveCouple = findActiveCoupleForUser(currentUser.userId, currentUser.coupleId)
+            if (myActiveCouple != null && myActiveCouple.isMatched) {
+                return Result.failure(
+                    IllegalStateException(
+                        "Zaten aktif bir eşleşmeniz bulunuyor. Başka bir eş kodu ile eşleşmek için önce mevcut eşleşmenizi sonlandırmalısınız."
+                    )
+                )
+            }
+
+            // 2. Look up partner code in pair_codes, with fallback to users collection
             var partnerUserId = ""
             var partnerUserName = ""
 
@@ -242,7 +341,6 @@ class CoupleRepository(private val db: FirebaseFirestore) {
                 }
             }
 
-            // Fallback lookup in users collection if pair_codes didn't have it
             if (partnerUserId.isBlank()) {
                 val userQuery = runCatching {
                     db.collection("users")
@@ -274,33 +372,64 @@ class CoupleRepository(private val db: FirebaseFirestore) {
                 )
             }
 
-            // Refresh partner's displayName from users/{partnerUserId} if possible
-            runCatching {
-                val partnerSnap = db.collection("users").document(partnerUserId).get().await()
-                val partnerUser = partnerSnap.toUserModel()
-                if (partnerUser != null && partnerUser.displayName.isNotBlank()) {
+            // Deterministic coupleId between these two users
+            val coupleId = listOf(currentUser.userId, partnerUserId).sorted().joinToString("_")
+
+            // If currentUser has a pending request with a DIFFERENT user, block until cancelled
+            if (myActiveCouple != null && myActiveCouple.isPending && myActiveCouple.coupleId != coupleId) {
+                return Result.failure(
+                    IllegalStateException(
+                        "Başka bir kullanıcıya gönderilmiş bekleyen bir eşleşme isteğiniz var. Önce mevcut isteği iptal etmelisiniz."
+                    )
+                )
+            }
+
+            // 3. Check partner's user profile to verify partner is NOT already matched with someone else
+            val partnerSnap = runCatching {
+                db.collection("users").document(partnerUserId).get().await()
+            }.getOrNull()
+            val partnerUser = partnerSnap?.toUserModel()
+            if (partnerUser != null) {
+                if (partnerUser.displayName.isNotBlank()) {
                     partnerUserName = partnerUser.displayName
+                }
+                if (partnerUser.coupleId.isNotBlank() && partnerUser.coupleId != coupleId) {
+                    // Verify if partner's other couple is legacy or truly active
+                    val partnerOtherCoupleDoc = runCatching {
+                        db.collection("couples").document(partnerUser.coupleId).get().await()
+                    }.getOrNull()
+                    val isLegacy = partnerOtherCoupleDoc != null &&
+                        partnerOtherCoupleDoc.exists() &&
+                        (partnerOtherCoupleDoc.getLong("schemaVersion") ?: 0L) < Couple.CURRENT_SCHEMA_VERSION
+
+                    if (!isLegacy) {
+                        return Result.failure(
+                            IllegalStateException(
+                                "${partnerUser.displayName.ifBlank { "Bu kullanıcı" }} şu anda başka biriyle eşleşmiş durumda. Eşleşmeyi sonlandırmadan yeni bir eşleşme yapılamaz."
+                            )
+                        )
+                    }
                 }
             }
 
             val safeMyName = currentUser.displayName.ifBlank { "Aşkım" }
             val safePartnerName = partnerUserName.ifBlank { "Sevdiğin" }
 
-            // Deterministic coupleId
-            val coupleId = listOf(currentUser.userId, partnerUserId).sorted().joinToString("_")
             val coupleDocRef = db.collection("couples").document(coupleId)
             val now = System.currentTimeMillis()
 
-            // Check if partner already created a pending request for us
+            // Check if a couple doc between these two users already exists
             val existingCoupleSnap = runCatching { coupleDocRef.get().await() }.getOrNull()
             val existingCouple = existingCoupleSnap?.toCoupleModel()
 
-            if (existingCouple != null &&
-                existingCouple.isPending &&
-                existingCouple.pendingRequesterId == partnerUserId
-            ) {
-                // Mutual code entry -> auto-approve!
-                return acceptPairRequest(existingCouple, currentUser)
+            if (existingCouple != null) {
+                if (existingCouple.isMatched) {
+                    return Result.failure(IllegalStateException("Bu kullanıcı ile zaten aktif bir eşleşmeniz var."))
+                }
+                if (existingCouple.isPending && existingCouple.pendingRequesterId == partnerUserId) {
+                    // Partner had already sent us a request -> approve it!
+                    return acceptPairRequest(existingCouple, currentUser)
+                }
             }
 
             val pendingCouple = Couple(
@@ -314,6 +443,7 @@ class CoupleRepository(private val db: FirebaseFirestore) {
                 status = Couple.STATUS_PENDING,
                 pendingRequesterId = currentUser.userId,
                 pendingRequesterName = safeMyName,
+                schemaVersion = Couple.CURRENT_SCHEMA_VERSION,
                 lastHeartSenderId = "",
                 lastHeartSenderName = "",
                 lastHeartTimestamp = 0L,
@@ -326,7 +456,6 @@ class CoupleRepository(private val db: FirebaseFirestore) {
                 updatedAt = Date(now)
             )
 
-            // Write explicit map so both "isMatched" and "matched" are consistent in Firestore
             val coupleMap = mapOf(
                 "coupleId" to coupleId,
                 "user1Id" to currentUser.userId,
@@ -339,6 +468,7 @@ class CoupleRepository(private val db: FirebaseFirestore) {
                 "status" to Couple.STATUS_PENDING,
                 "pendingRequesterId" to currentUser.userId,
                 "pendingRequesterName" to safeMyName,
+                "schemaVersion" to Couple.CURRENT_SCHEMA_VERSION,
                 "lastHeartSenderId" to "",
                 "lastHeartSenderName" to "",
                 "lastHeartTimestamp" to 0L,
@@ -353,7 +483,6 @@ class CoupleRepository(private val db: FirebaseFirestore) {
 
             coupleDocRef.set(coupleMap).await()
 
-            // Update own user document
             runCatching {
                 db.collection("users").document(currentUser.userId)
                     .set(
@@ -366,7 +495,6 @@ class CoupleRepository(private val db: FirebaseFirestore) {
                     .await()
             }
 
-            // Best-effort update partner user document (will not fail pairing if rules block cross-user write)
             runCatching {
                 db.collection("users").document(partnerUserId)
                     .update("coupleId", coupleId, "updatedAt", FieldValue.serverTimestamp())
@@ -382,9 +510,38 @@ class CoupleRepository(private val db: FirebaseFirestore) {
 
     /**
      * Approves an incoming pairing request and activates the couple match for both devices.
+     * Ensures neither user has another active match so hearts only ever go to one partner.
      */
     suspend fun acceptPairRequest(couple: Couple, currentUser: User): Result<Couple> {
         return try {
+            // Verify currentUser has no other active match
+            val myOtherActive = findActiveCoupleForUser(currentUser.userId, currentUser.coupleId)
+            if (myOtherActive != null && myOtherActive.coupleId != couple.coupleId && myOtherActive.isMatched) {
+                return Result.failure(
+                    IllegalStateException(
+                        "Zaten aktif bir eşleşmeniz bulunuyor. Önce mevcut eşleşmenizi sonlandırmalısınız."
+                    )
+                )
+            }
+
+            val partnerId = if (couple.user1Id == currentUser.userId) couple.user2Id else couple.user1Id
+            if (partnerId.isNotBlank()) {
+                val partnerSnap = runCatching {
+                    db.collection("users").document(partnerId).get().await()
+                }.getOrNull()
+                val partnerUser = partnerSnap?.toUserModel()
+                if (partnerUser != null &&
+                    partnerUser.coupleId.isNotBlank() &&
+                    partnerUser.coupleId != couple.coupleId
+                ) {
+                    return Result.failure(
+                        IllegalStateException(
+                            "Karşı taraf başka biriyle eşleşmiş durumda. Önce mevcut eşleşmesini sonlandırmalıdır."
+                        )
+                    )
+                }
+            }
+
             val now = System.currentTimeMillis()
             val safeMyName = currentUser.displayName.ifBlank { "Aşkım" }
             val anniversary = if (couple.anniversaryDate > 0L) couple.anniversaryDate else now
@@ -393,6 +550,7 @@ class CoupleRepository(private val db: FirebaseFirestore) {
                 "isMatched" to true,
                 "matched" to true,
                 "status" to Couple.STATUS_MATCHED,
+                "schemaVersion" to Couple.CURRENT_SCHEMA_VERSION,
                 "anniversaryDate" to anniversary,
                 "lastHeartSenderId" to currentUser.userId,
                 "lastHeartSenderName" to safeMyName,
@@ -409,6 +567,19 @@ class CoupleRepository(private val db: FirebaseFirestore) {
                 .set(updates, SetOptions.merge())
                 .await()
 
+            // Remove any other non-matched/stale couple docs for this user so only 1 couple doc exists
+            val stale1 = runCatching {
+                db.collection("couples").whereEqualTo("user1Id", currentUser.userId).get().await()
+            }.getOrNull()?.documents ?: emptyList()
+            val stale2 = runCatching {
+                db.collection("couples").whereEqualTo("user2Id", currentUser.userId).get().await()
+            }.getOrNull()?.documents ?: emptyList()
+            (stale1 + stale2).forEach { doc ->
+                if (doc.id != couple.coupleId) {
+                    runCatching { doc.reference.delete().await() }
+                }
+            }
+
             runCatching {
                 db.collection("users").document(currentUser.userId)
                     .set(
@@ -421,7 +592,6 @@ class CoupleRepository(private val db: FirebaseFirestore) {
                     .await()
             }
 
-            val partnerId = if (couple.user1Id == currentUser.userId) couple.user2Id else couple.user1Id
             if (partnerId.isNotBlank()) {
                 runCatching {
                     db.collection("users").document(partnerId)
@@ -433,6 +603,7 @@ class CoupleRepository(private val db: FirebaseFirestore) {
             val matchedCouple = couple.copy(
                 isMatched = true,
                 status = Couple.STATUS_MATCHED,
+                schemaVersion = Couple.CURRENT_SCHEMA_VERSION,
                 anniversaryDate = anniversary,
                 lastHeartSenderId = currentUser.userId,
                 lastHeartSenderName = safeMyName,
@@ -452,7 +623,8 @@ class CoupleRepository(private val db: FirebaseFirestore) {
     }
 
     /**
-     * Rejects an incoming pairing request or cancels an outgoing pending request.
+     * Rejects an incoming pairing request or cancels an outgoing pending request,
+     * and deletes the pending document from Firestore.
      */
     suspend fun rejectOrCancelPairRequest(couple: Couple, currentUserId: String): Result<Unit> {
         return try {
@@ -467,6 +639,10 @@ class CoupleRepository(private val db: FirebaseFirestore) {
                     SetOptions.merge()
                 )
                 .await()
+
+            runCatching {
+                db.collection("couples").document(couple.coupleId).delete().await()
+            }
 
             runCatching {
                 db.collection("users").document(currentUserId)
@@ -541,7 +717,7 @@ class CoupleRepository(private val db: FirebaseFirestore) {
     }
 
     suspend fun unlinkCouple(coupleId: String, user1Id: String, user2Id: String) {
-        // Set isMatched = false and status = UNLINKED so both live listeners catch it immediately
+        // Set isMatched = false first so live listeners catch it, then delete the couple document
         db.collection("couples").document(coupleId)
             .set(
                 mapOf(
@@ -564,6 +740,10 @@ class CoupleRepository(private val db: FirebaseFirestore) {
             db.collection("users").document(user2Id)
                 .update("coupleId", "", "updatedAt", FieldValue.serverTimestamp())
                 .await()
+        }
+
+        runCatching {
+            db.collection("couples").document(coupleId).delete().await()
         }
     }
 
