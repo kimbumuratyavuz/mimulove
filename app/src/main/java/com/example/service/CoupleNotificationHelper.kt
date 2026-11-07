@@ -10,6 +10,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
+import com.example.ui.overlay.HeartBurstOverlayActivity
 import com.example.util.HeartSoundPlayer
 import com.example.util.HeartVibrator
 
@@ -90,24 +91,28 @@ object CoupleNotificationHelper {
 
     fun showHeartReceivedNotification(
         context: Context,
+        coupleId: String = "",
+        myUserId: String = "",
+        myUserName: String = "Aşkım",
         senderName: String,
         noteText: String,
         timestamp: Long
     ) {
         createNotificationChannels(context)
 
-        val intent = Intent(context, MainActivity::class.java).apply {
-            action = ACTION_OPEN_HEART
-            putExtra(EXTRA_SENDER_NAME, senderName)
-            putExtra(EXTRA_NOTE_TEXT, noteText)
-            putExtra(EXTRA_TIMESTAMP, timestamp)
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-        }
+        val overlayIntent = HeartBurstOverlayActivity.createIntent(
+            context = context,
+            coupleId = coupleId,
+            myUserId = myUserId,
+            myUserName = myUserName,
+            senderName = senderName,
+            noteText = noteText
+        )
 
-        val pendingIntent = PendingIntent.getActivity(
+        val overlayPendingIntent = PendingIntent.getActivity(
             context,
             (timestamp and 0x7FFFFFFF).toInt(),
-            intent,
+            overlayIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -119,9 +124,10 @@ object CoupleNotificationHelper {
             .setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
             .setSmallIcon(R.drawable.ic_widget_heart)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setContentIntent(pendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setContentIntent(overlayPendingIntent)
+            .setFullScreenIntent(overlayPendingIntent, true)
             .setAutoCancel(true)
             .setVibrate(longArrayOf(0, 110, 80, 160))
             .build()

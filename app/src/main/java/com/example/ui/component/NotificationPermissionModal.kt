@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -63,7 +64,6 @@ fun NotificationPermissionModal(
                     .padding(horizontal = 24.dp, vertical = 28.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Header Icon
                 Box(
                     modifier = Modifier
                         .size(80.dp)
@@ -109,7 +109,6 @@ fun NotificationPermissionModal(
 
                 Spacer(modifier = Modifier.height(18.dp))
 
-                // Feature Highlights
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -127,7 +126,6 @@ fun NotificationPermissionModal(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Action Buttons
                 Button(
                     onClick = onGrantClicked,
                     modifier = Modifier
@@ -154,6 +152,130 @@ fun NotificationPermissionModal(
                 ) {
                     Text(
                         text = "Daha Sonra Hatırlat",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun OverlayPermissionModal(
+    onGrantClicked: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .padding(horizontal = 8.dp)
+                .testTag("overlay_permission_modal"),
+            shape = RoundedCornerShape(28.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.primaryContainer,
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                                )
+                            )
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Favorite,
+                        contentDescription = "Ekran Üstü Kalp İzni",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(42.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                Text(
+                    text = "Ekranda Canlı Kalp Patlaması 💖",
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.3.sp
+                    ),
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "Uygulama kapalıyken ve ekranınız açıkken sevgiliniz kalp gönderdiğinde ekranınızda kocaman bir kalp patlaması çıkması için 'Diğer uygulamaların üzerinde göster' iznini açın.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    FeatureRow(emoji = "💥", text = "Uygulama kapalıyken ekranda dev kalp patlaması")
+                    FeatureRow(emoji = "❤️", text = "'Sen de Gönder' butonu ile anında karşılık verme")
+                    FeatureRow(emoji = "✨", text = "Hangi uygulamada olursanız olun sürpriz kalpler")
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Button(
+                    onClick = onGrantClicked,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .testTag("grant_overlay_button"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    )
+                ) {
+                    Text(
+                        text = "Ekran Üstü İznini Aç ❤️",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.testTag("dismiss_overlay_button")
+                ) {
+                    Text(
+                        text = "Daha Sonra",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

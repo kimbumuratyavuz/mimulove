@@ -6,11 +6,14 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.content.ContextCompat
+import com.example.MainActivity
 import com.example.R
 import com.example.data.model.Couple
 import com.example.data.model.toCoupleModel
 import com.example.data.model.toUserModel
+import com.example.ui.overlay.HeartBurstOverlayActivity
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -86,7 +89,6 @@ class CoupleHeartbeatService : Service() {
         coupleUser1Listener?.remove()
         coupleUser2Listener?.remove()
 
-        // 1. Listen to user profile for direct coupleId
         userListener = firestore.collection("users").document(uid)
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
@@ -102,7 +104,6 @@ class CoupleHeartbeatService : Service() {
                 }
             }
 
-        // 2. Listen directly to couples where user1Id == uid or user2Id == uid
         coupleUser1Listener = firestore.collection("couples")
             .whereEqualTo("user1Id", uid)
             .addSnapshotListener { snap, error ->
@@ -158,6 +159,9 @@ class CoupleHeartbeatService : Service() {
             return
         }
 
+        val myUserName = (if (couple.user1Id == myUserId) couple.user1Name else couple.user2Name)
+            .ifBlank { "Aşkım" }
+
         // Case 2: Partner just accepted our pending request
         val matchKey = "${couple.coupleId}_${couple.anniversaryDate}_matched"
         val lastNotifiedMatch = prefs.getString("last_notified_match", "")
@@ -191,12 +195,31 @@ class CoupleHeartbeatService : Service() {
                     if (heartSender == couple.user1Id) couple.user1Name else couple.user2Name
                 }.ifBlank { "Aşkın" }
                 val attachedNote = if (couple.lastNoteTimestamp == heartTime) couple.lastNoteText else ""
+
+                // Show status bar notification
                 CoupleNotificationHelper.showHeartReceivedNotification(
-                    this,
+                    context = this,
+                    coupleId = couple.coupleId,
+                    myUserId = myUserId,
+                    myUserName = myUserName,
                     senderName = senderName,
                     noteText = attachedNote,
                     timestamp = heartTime
                 )
+
+                // If app is closed/in background AND screen is ON, pop up the giant exploding heart overlay!
+                val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                val isScreenOn = powerManager?.isInteractive ?: true
+                if (isScreenOn && !MainActivity.isInForeground) {
+                    HeartBurstOverlayActivity.launch(
+                        context = this,
+                        coupleId = couple.coupleId,
+                        myUserId = myUserId,
+                        myUserName = myUserName,
+                        senderName = senderName,
+                        noteText = attachedNote
+                    )
+                }
             }
         }
 
@@ -226,6 +249,19 @@ class CoupleHeartbeatService : Service() {
                     noteText = couple.lastNoteText,
                     timestamp = noteTime
                 )
+
+                val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                val isScreenOn = powerManager?.isInteractive ?: true
+                if (isScreenOn && !MainActivity.isInForeground) {
+                    HeartBurstOverlayActivity.launch(
+                        context = this,
+                        coupleId = couple.coupleId,
+                        myUserId = myUserId,
+                        myUserName = myUserName,
+                        senderName = senderName,
+                        noteText = couple.lastNoteText
+                    )
+                }
             }
         }
     }

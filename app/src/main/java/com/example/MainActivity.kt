@@ -3,8 +3,10 @@ package com.example
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -27,9 +29,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.service.CoupleNotificationHelper
 import com.example.ui.component.NotificationPermissionModal
+import com.example.ui.component.OverlayPermissionModal
 import com.example.ui.screen.AuthScreen
 import com.example.ui.screen.HomeScreen
 import com.example.ui.screen.PairingScreen
@@ -82,6 +88,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        isInForeground = true
+    }
+
+    override fun onPause() {
+        super.onPause()
+        isInForeground = false
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -98,6 +114,11 @@ class MainActivity : ComponentActivity() {
         } else if (intent?.action == CoupleNotificationHelper.ACTION_TRIGGER_SEND_HEART) {
             shouldTriggerSendHeart = true
         }
+    }
+
+    companion object {
+        @Volatile
+        var isInForeground: Boolean = false
     }
 }
 
@@ -123,38 +144,76 @@ fun AppRootContent(viewModel: CoupleViewModel) {
             }
         )
     } else {
-        // Notification permission request shown in a stylish modal only after Google login
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val context = LocalContext.current
-            var showPermissionModal by remember {
-                mutableStateOf(
+        val context = LocalContext.current
+        val lifecycleOwner = LocalLifecycleOwner.current
+
+        var showNotificationModal by remember {
+            mutableStateOf(
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                     ContextCompat.checkSelfPermission(
                         context,
                         Manifest.permission.POST_NOTIFICATIONS
                     ) != PackageManager.PERMISSION_GRANTED
-                )
-            }
+            )
+        }
 
-            val permissionLauncher = rememberLauncherForActivityResult(
-                contract = ActivityResultContracts.RequestPermission()
-            ) { isGranted ->
-                showPermissionModal = false
-                if (isGranted) {
-                    HeartSoundPlayer.playLoveChime()
-                    HeartVibrator.vibrateTouch(context)
+        var showOverlayModal by remember {
+            mutableStateOf(
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                    !Settings.canDrawOverlays(context)
+            )
+        }
+
+        DisposableEffect(lifecycleOwner) {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(context)) {
+                        showOverlayModal = false
+                    }
                 }
             }
-
-            if (showPermissionModal) {
-                NotificationPermissionModal(
-                    onGrantClicked = {
-                        permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    },
-                    onDismiss = {
-                        showPermissionModal = false
-                    }
-                )
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose {
+                lifecycleOwner.lifecycle.removeObserver(observer)
             }
+        }
+
+        val permissionLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission()
+        ) { isGranted ->
+            showNotificationModal = false
+            if (isGranted) {
+                HeartSoundPlayer.playLoveChime()
+                HeartVibrator.vibrateTouch(context)
+            }
+        }
+
+        if (showNotificationModal && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            NotificationPermissionModal(
+                onGrantClicked = {
+                    permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                },
+                onDismiss = {
+                    showNotificationModal = false
+                }
+            )
+        } else if (showOverlayModal && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            OverlayPermissionModal(
+                onGrantClicked = {
+                    try {
+                        val intent = Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:${context.packageName}")
+                        )
+                        context.startActivity(intent)
+                    } catch (_: Exception) {
+                        showOverlayModal = false
+                    }
+                },
+                onDismiss = {
+                    showOverlayModal = false
+                }
+            )
         }
 
         key(user.uid) {
